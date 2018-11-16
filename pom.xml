@@ -41,18 +41,7 @@
 	</dependencyManagement>
 
 	<modules>
-		<module>spring-cloud-function-dependencies</module>
-		<module>spring-cloud-function-compiler</module>
-		<module>spring-cloud-function-core</module>
-		<module>spring-cloud-function-context</module>
-		<module>spring-cloud-function-task</module>
-		<module>spring-cloud-function-web</module>
-		<module>spring-cloud-starter-function-web</module>
-		<module>spring-cloud-starter-function-webflux</module>
 		<module>spring-cloud-function-samples</module>
-		<module>spring-cloud-function-deployer</module>
-		<module>spring-cloud-function-adapters</module>
-		<module>docs</module>
 	</modules>
 
 	<build>
