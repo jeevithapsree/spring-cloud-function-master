@@ -1,0 +1,261 @@
+= Spring Cloud Function
+
+Mark Fisher, Dave Syer, Oleg Zhurakousky
+
+---
+
+:github: https://github.com/spring-cloud/spring-cloud-function
+:githubmaster: {github}/tree/master
+:docslink: {githubmaster}/docs/src/main/asciidoc
+:nofooter:
+
+== Introduction
+
+include::intro.adoc[]
+
+include::https://raw.githubusercontent.com/spring-cloud/spring-cloud-build/master/docs/src/main/asciidoc/contributing-docs.adoc[]
+
+== Getting Started
+
+include::getting-started.adoc[]
+
+== Function Catalog and Flexible Function Signatures
+
+One of the main features of Spring Cloud Function is to adapt and support a range of type signatures for user-defined functions,
+while providing a consistent execution model.
+That's why all user defined functions are transformed into a canonical representation by `FunctionCatalog`, using primitives
+defined by the https://projectreactor.io/[Project Reactor] (i.e., `Flux<T>` and `Mono<T>`).
+Users can supply a bean of type `Function<String,String>`, for instance, and the `FunctionCatalog` will wrap it into a
+`Function<Flux<String>,Flux<String>>`.
+
+Using Reactor based primitives not only helps with the canonical representation of user defined functions, but it also
+facilitates a more robust and flexible(reactive) execution model.
+
+While users don't normally have to care about the `FunctionCatalog` at all, it is useful to know what
+kind of functions are supported in user code.
+
+=== Java 8 function support
+
+Generally speaking users can expect that if they write a function for
+a plain old Java type (or primitive wrapper), then the function
+catalog will wrap it to a `Flux` of the same type. If the user writes
+a function using `Message` (from spring-messaging) it will receive and
+transmit headers from any adapter that supports key-value metadata
+(e.g. HTTP headers). Here are the details.
+
+|===
+| User Function | Catalog Registration |
+
+| `Function<S,T>` | `Function<Flux<S>, Flux<T>>` |
+| `Function<Message<S>,Message<T>>` | `Function<Flux<Message<S>>, Flux<Message<T>>>` |
+| `Function<Flux<S>, Flux<T>>` | `Function<Flux<S>, Flux<T>>` (pass through) |
+| `Supplier<T>` | `Supplier<Flux<T>>` |
+| `Supplier<Flux<T>>` | `Supplier<Flux<T>>` |
+| `Consumer<T>` | `Function<Flux<T>, Mono<Void>>` |
+| `Consumer<Message<T>>` | `Function<Flux<Message<T>>, Mono<Void>>` |
+| `Consumer<Flux<T>>` | `Consumer<Flux<T>>` |
+
+|===
+
+Consumer is a little bit special because it has a `void` return type,
+which implies blocking, at least potentially. Most likely you will not
+need to write `Consumer<Flux<?>>`, but if you do need to do that,
+remember to subscribe to the input flux. If you declare a `Consumer`
+of a non publisher type (which is normal), it will be converted to a
+function that returns a publisher, so that it can be subscribed to in
+a controlled way.
+
+=== Kotlin Lambda support
+
+We also provide support for Kotlin lambdas (since v2.0).
+Consider the following:
+
+[source, java]
+----
+@Bean
+open fun kotlinSupplier(): () -> String {
+    return  { "Hello from Kotlin" }
+}
+
+@Bean
+open fun kotlinFunction(): (String) -> String {
+    return  { it.toUpperCase() }
+}
+
+@Bean
+open fun kotlinConsumer(): (String) -> Unit {
+    return  { println(it) }
+}
+
+----
+The above represents Kotlin lambdas configured as Spring beans. The signature of each maps to a Java equivalent of
+`Supplier`, `Function` and `Consumer`, and thus supported/recognized signatures by the framework.
+While mechanics of Kotlin-to-Java mapping are outside of the scope of this documentation, it is important to understand that the
+same rules for signature transformation outlined in "Java 8 function support" section are applied here as well.
+
+== Standalone Web Applications
+
+The `spring-cloud-function-web` module has autoconfiguration that
+activates when it is included in a Spring Boot web application (with
+MVC support). There is also a `spring-cloud-starter-function-web` to
+collect all the optional dependencies in case you just want a simple
+getting started experience.
+
+With the web configurations activated your app will have an MVC
+endpoint (on "/" by default, but configurable with
+`spring.cloud.function.web.path`) that can be used to access the
+functions in the application context. The supported content types are
+plain text and JSON.
+
+|===
+| Method | Path | Request | Response | Status
+
+| GET    | /{supplier} | - | Items from the named supplier              | 200 OK 
+| POST   | /{consumer} | JSON object or text | Mirrors input and pushes request body into consumer           | 202 Accepted
+| POST   | /{consumer} | JSON array or text with new lines | Mirrors input and pushes body into consumer one by one | 202 Accepted
+| POST   | /{function} | JSON object or text | The result of applying the named function | 200 OK
+| POST   | /{function} | JSON array or text with new lines | The result of applying the named function | 200 OK
+| GET    | /{function}/{item} | - | Convert the item into an object and return the result of applying the function | 200 OK
+
+|===
+
+As the table above shows the behaviour of the endpoint depends on the method and also the type of incoming request data. When the incoming data is single valued, and the target function is declared as obviously single valued (i.e. not returning a collection or `Flux`), then the response will also contain a single value. For multi-valued responses the client can ask for a server-sent event stream by sending `Accept: text/event-stream". If there is only one function (consumer etc.) then the name in the path is optional. Composite functions can be addressed using pipes or commas to separate function names (pipes are legal in URL paths, but a bit awkward to type on the command line).
+
+Functions and consumers that are declared with input and output in `Message<?>` will see the request headers on the input messages, and the output message headers will be converted to HTTP headers.
+
+When POSTing text the response format might be different with Spring Boot 2.0 and older versions, depending on the content negotiation (provide content type and accpt headers for the best results).
+
+== Standalone Streaming Applications
+
+To send or receive messages from a broker (such as RabbitMQ or Kafka) you can leverage `spring-cloud-stream` project and it's integration with Spring Cloud Function.
+Please refer to https://docs.spring.io/spring-cloud-stream/docs/current/reference/htmlsingle/#_spring_cloud_function[Spring Cloud Function] section of the Spring Cloud Stream reference manual for more details and examples.
+
+== Deploying a Packaged Function
+
+Spring Cloud Function provides a "deployer" library that allows you to launch a jar file (or exploded archive, or set of jar files) with an isolated class loader and expose the functions defined in it. This is quite a powerful tool that would allow you to, for instance, adapt a function to a range of different input-output adapters without changing the target jar file. Serverless platforms often have this kind of feature built in, so you could see it as a building block for a function invoker in such a platform (indeed the https://projectriff.io[Riff] Java function invoker uses this library).
+
+The standard entry point of the API is the Spring configuration annotation `@EnableFunctionDeployer`. If that is used in a Spring Boot application the deployer kicks in and looks for some configuration to tell it where to find the function jar. At a minimum the user has to provide a `function.location` which is a URL or resource location for the archive containing the functions. It can optionally use a `maven:` prefix to locate the artifact via a dependency lookup (see `FunctionProperties` for complete details). A Spring Boot application is bootstrapped from the jar file, using the `MANIFEST.MF` to locate a start class, so that a standard Spring Boot fat jar works well, for example. If the target jar can be launched successfully then the result is a function registered in the main application's `FunctionCatalog`. The registered function can be applied by code in the main application, even though it was created in an isolated class loader (by deault).
+
+== Functional Bean Definitions
+
+include::functional.adoc[leveloffset=+1]
+
+== Dynamic Compilation
+
+There is a sample app that uses the function compiler to create a
+function from a configuration property. The vanilla "function-sample"
+also has that feature. And there are some scripts that you can run to
+see the compilation happening at run time. To run these examples,
+change into the `scripts` directory:
+
+----
+cd scripts
+----
+
+Also, start a RabbitMQ server locally (e.g. execute `rabbitmq-server`).
+
+Start the Function Registry Service:
+
+----
+./function-registry.sh
+----
+
+Register a Function:
+
+----
+./registerFunction.sh -n uppercase -f "f->f.map(s->s.toString().toUpperCase())"
+----
+
+Run a REST Microservice using that Function:
+
+----
+./web.sh -f uppercase -p 9000
+curl -H "Content-Type: text/plain" -H "Accept: text/plain" localhost:9000/uppercase -d foo
+----
+
+Register a Supplier:
+
+----
+./registerSupplier.sh -n words -f "()->Flux.just(\"foo\",\"bar\")"
+----
+
+Run a REST Microservice using that Supplier:
+
+----
+./web.sh -s words -p 9001
+curl -H "Accept: application/json" localhost:9001/words
+----
+
+Register a Consumer:
+
+----
+./registerConsumer.sh -n print -t String -f "System.out::println"
+----
+
+Run a REST Microservice using that Consumer:
+
+----
+./web.sh -c print -p 9002
+curl -X POST -H "Content-Type: text/plain" -d foo localhost:9002/print
+----
+
+Run Stream Processing Microservices:
+
+First register a streaming words supplier:
+
+----
+./registerSupplier.sh -n wordstream -f "()->Flux.interval(Duration.ofMillis(1000)).map(i->\"message-\"+i)"
+----
+
+Then start the source (supplier), processor (function), and sink (consumer) apps
+(in reverse order):
+
+----
+./stream.sh -p 9103 -i uppercaseWords -c print
+./stream.sh -p 9102 -i words -f uppercase -o uppercaseWords
+./stream.sh -p 9101 -s wordstream -o words
+----
+
+The output will appear in the console of the sink app (one message per second, converted to uppercase):
+
+----
+MESSAGE-0
+MESSAGE-1
+MESSAGE-2
+MESSAGE-3
+MESSAGE-4
+MESSAGE-5
+MESSAGE-6
+MESSAGE-7
+MESSAGE-8
+MESSAGE-9
+...
+----
+
+== Serverless Platform Adapters
+
+As well as being able to run as a standalone process, a Spring Cloud
+Function application can be adapted to run one of the existing
+serverless platforms. In the project there are adapters for
+https://github.com/spring-cloud/spring-cloud-function/tree/master/spring-cloud-function-adapters/spring-cloud-function-adapter-aws[AWS
+Lambda],
+https://github.com/spring-cloud/spring-cloud-function/tree/master/spring-cloud-function-adapters/spring-cloud-function-adapter-azure[Azure],
+and
+https://github.com/spring-cloud/spring-cloud-function/tree/master/spring-cloud-function-adapters/spring-cloud-function-adapter-openwhisk[Apache
+OpenWhisk]. The https://github.com/fnproject/fn[Oracle Fn platform]
+has its own Spring Cloud Function adapter. And
+https://projectriff.io[Riff] supports Java functions and its
+https://github.com/projectriff/java-function-invoker[Java Function
+Invoker] acts natively is an adapter for Spring Cloud Function jars.
+
+=== AWS Lambda
+
+include::adapters/aws.adoc[leveloffset=+2]
+
+=== Azure Functions
+
+include::adapters/azure.adoc[leveloffset=+2]
+
+=== Apache Openwhisk
+
+include::adapters/openwhisk.adoc[leveloffset=+2]
